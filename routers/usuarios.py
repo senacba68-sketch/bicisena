@@ -30,7 +30,7 @@ async def registrar_usuario(
         datos_qr = f"Codigo: {codigo}\nNombre: {nombre}\nCedula: {cedula}\nTelefono: {telefono}"
         qr_img = qrcode.make(datos_qr)
         buf = io.BytesIO()
-        qr_img.save(buf)  # guardar imagen generada en PNG
+        qr_img.save(buf, format="PNG")  # guardar imagen generada en PNG
         qr_bytes = buf.getvalue()
         buf.close()
 
@@ -66,3 +66,4 @@ def login(cedula: str = Form(...), contrasena: str = Form(...)):
     user["foto_usuario_blob"] = blob_to_b64(user.get("foto_usuario_blob"))
 
     return {"ok": True, "usuario": user}
+

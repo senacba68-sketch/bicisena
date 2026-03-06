@@ -25,15 +25,17 @@ async def registrar_usuario(
     foto_bici: UploadFile = File(None),
     foto_usuario: UploadFile = File(None)
 ):
+    conn = None
+    cursor = None
     try:
         conn = conectar()
         cursor = conn.cursor()
 
-        # Leer imágenes si existen
+        # Leer imágenes
         bici_bytes = await foto_bici.read() if foto_bici else None
         usuario_bytes = await foto_usuario.read() if foto_usuario else None
 
-        # Generar QR con datos claros y legibles
+        # Generar QR
         datos_qr = f"""
 BICISENA - CODIGO UNICO
 Codigo: {codigo}
@@ -43,28 +45,20 @@ Teléfono: {telefono}
 Correo: {correo}
         """.strip()
 
-        # Generar la imagen QR
-        qr = qrcode.QRCode(
-            version=1,
-            error_correction=qrcode.constants.ERROR_CORRECT_L,
-            box_size=10,
-            border=4,
-        )
+        qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=4)
         qr.add_data(datos_qr)
         qr.make(fit=True)
         img = qr.make_image(fill_color="black", back_color="white")
 
-        # Guardar en buffer como PNG
         buf = io.BytesIO()
-        img.save(buf, format="PNG")  # formato explícito OBLIGATORIO
+        img.save(buf, format="PNG")
         qr_bytes = buf.getvalue()
         buf.close()
 
-        # Log para depurar (quitar en producción)
-        print(f"Datos QR generados: {datos_qr}")
-        print(f"Tamaño bytes QR: {len(qr_bytes)}")
+        print(f"[DEBUG] Datos QR: {datos_qr}")
+        print(f"[DEBUG] Tamaño QR bytes: {len(qr_bytes)}")
 
-        # Insertar en la base de datos
+        # INSERT
         cursor.execute("""
             INSERT INTO usuarios 
             (nombre, cedula, telefono, correo, contrasena, codigo, qr_blob, foto_bici_blob, foto_usuario_blob)
@@ -72,11 +66,9 @@ Correo: {correo}
         """, (nombre, cedula, telefono, correo, contrasena, codigo, qr_bytes, bici_bytes, usuario_bytes))
         conn.commit()
 
-        # Obtener el ID recién insertado (opcional, pero útil)
         cursor.execute("SELECT LAST_INSERT_ID()")
         user_id = cursor.fetchone()[0]
 
-        # Devolver respuesta con usuario y QR en base64 listo para Flet
         return {
             "ok": True,
             "mensaje": "Usuario registrado con éxito",
@@ -87,19 +79,27 @@ Correo: {correo}
                 "telefono": telefono,
                 "correo": correo,
                 "codigo": codigo,
-                "qr_blob": blob_to_b64(qr_bytes),  # con prefijo data:image/png;base64,
+                "qr_blob": blob_to_b64(qr_bytes),
                 "foto_bici_blob": blob_to_b64(bici_bytes),
                 "foto_usuario_blob": blob_to_b64(usuario_bytes)
             }
         }
 
+    except pymysql.Error as db_err:
+        if conn:
+            conn.rollback()
+        print(f"[ERROR BD] {db_err}")
+        raise HTTPException(status_code=500, detail=f"Error en base de datos: {str(db_err)}")
     except Exception as e:
-        conn.rollback()
-        print(f"ERROR en registro: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        if conn:
+            conn.rollback()
+        print(f"[ERROR GENERAL] {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
     finally:
-        cursor.close()
-        conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 
 @router.post("/login")
@@ -121,3 +121,4 @@ def login(cedula: str = Form(...), contrasena: str = Form(...)):
     user_dict["foto_usuario_blob"] = blob_to_b64(user.get("foto_usuario_blob"))
 
     return {"ok": True, "usuario": user_dict}
+

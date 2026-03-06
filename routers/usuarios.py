@@ -3,11 +3,12 @@ from database import conectar
 import base64
 import io
 import qrcode
+import pymysql   # ← IMPORT AGREGADO AQUÍ
 
 router = APIRouter(prefix="/usuarios", tags=["Usuarios"])
 
 def blob_to_b64(blob):
-    """Convierte BLOB a base64 string (con prefijo data URI si es imagen)"""
+    """Convierte BLOB a base64 string con prefijo data URI"""
     if not blob:
         return None
     b64 = base64.b64encode(blob).decode('utf-8')
@@ -35,7 +36,7 @@ async def registrar_usuario(
         bici_bytes = await foto_bici.read() if foto_bici else None
         usuario_bytes = await foto_usuario.read() if foto_usuario else None
 
-        # Generar QR
+        # Generar QR con datos claros
         datos_qr = f"""
 BICISENA - CODIGO UNICO
 Codigo: {codigo}
@@ -45,7 +46,12 @@ Teléfono: {telefono}
 Correo: {correo}
         """.strip()
 
-        qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=4)
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
         qr.add_data(datos_qr)
         qr.make(fit=True)
         img = qr.make_image(fill_color="black", back_color="white")
@@ -55,10 +61,11 @@ Correo: {correo}
         qr_bytes = buf.getvalue()
         buf.close()
 
+        # Log para depurar (quitar en producción si quieres)
         print(f"[DEBUG] Datos QR: {datos_qr}")
         print(f"[DEBUG] Tamaño QR bytes: {len(qr_bytes)}")
 
-        # INSERT
+        # Insertar en BD
         cursor.execute("""
             INSERT INTO usuarios 
             (nombre, cedula, telefono, correo, contrasena, codigo, qr_blob, foto_bici_blob, foto_usuario_blob)
@@ -121,4 +128,3 @@ def login(cedula: str = Form(...), contrasena: str = Form(...)):
     user_dict["foto_usuario_blob"] = blob_to_b64(user.get("foto_usuario_blob"))
 
     return {"ok": True, "usuario": user_dict}
-

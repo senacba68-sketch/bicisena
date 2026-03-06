@@ -23,32 +23,50 @@ def registrar_movimiento(codigo: str = Form(...)):
     conn = None
     cursor = None
     try:
+        # 🔧 LIMPIAR EL CODIGO QUE VIENE DEL QR
+        codigo = codigo.strip()
+
         conn = conectar()
-        cursor = conn.cursor(pymysql.cursors.DictCursor)  # ✅ FIX
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
 
         # Buscar usuario con ese código
-        cursor.execute("SELECT * FROM usuarios WHERE codigo=%s", (codigo,))
+        cursor.execute("SELECT * FROM usuarios WHERE TRIM(codigo)=%s", (codigo,))
         usuario = cursor.fetchone()
 
         if not usuario:
-            return JSONResponse(status_code=404, content={"ok": False, "mensaje": "Usuario no encontrado"})
+            return JSONResponse(
+                status_code=404,
+                content={"ok": False, "mensaje": f"Usuario no encontrado para código: {codigo}"}
+            )
 
         # Verificar si la bicicleta está dentro
-        cursor.execute("SELECT * FROM bicicletas WHERE codigo=%s AND fecha_salida IS NULL", (codigo,))
+        cursor.execute(
+            "SELECT * FROM bicicletas WHERE codigo=%s AND fecha_salida IS NULL",
+            (codigo,)
+        )
         reg = cursor.fetchone()
 
         if reg:
+            # Registrar salida
             cursor.execute(
                 "UPDATE bicicletas SET fecha_salida=%s, estado=%s WHERE id=%s",
-                (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "Retirada", reg["id"])
+                (
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "Retirada",
+                    reg["id"]
+                )
             )
             conn.commit()
             mensaje = "Salida registrada"
+
         else:
+            # Registrar entrada
             cursor.execute(
-                """INSERT INTO bicicletas 
-                   (codigo, nombre, cedula, telefono, fecha_ingreso, estado) 
-                   VALUES (%s,%s,%s,%s,%s,%s)""",
+                """
+                INSERT INTO bicicletas
+                (codigo, nombre, cedula, telefono, fecha_ingreso, estado)
+                VALUES (%s,%s,%s,%s,%s,%s)
+                """,
                 (
                     usuario["codigo"],
                     usuario["nombre"],
@@ -71,16 +89,23 @@ def registrar_movimiento(codigo: str = Form(...)):
             "foto_usuario_blob": blob_to_b64(usuario.get("foto_usuario_blob")),
         }
 
-        return {"ok": True, "mensaje": mensaje, "usuario": usuario_data}
+        return {
+            "ok": True,
+            "mensaje": mensaje,
+            "usuario": usuario_data
+        }
 
     except Exception as e:
         import traceback
         print("❌ ERROR en registrar_movimiento:", str(e))
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
     finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 
 # Listar registros con filtros
@@ -93,7 +118,7 @@ def listar_registros(
     cursor = None
     try:
         conn = conectar()
-        cursor = conn.cursor(pymysql.cursors.DictCursor)  # ✅ FIX
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
 
         query = "SELECT * FROM bicicletas"
         condiciones = []
@@ -106,6 +131,7 @@ def listar_registros(
         if filtro == "En parqueadero":
             condiciones.append("estado = %s")
             params.append("En parqueadero")
+
         elif filtro == "Retiradas":
             condiciones.append("estado = %s")
             params.append("Retirada")
@@ -117,26 +143,33 @@ def listar_registros(
 
         cursor.execute(query, params)
         registros = cursor.fetchall()
+
         return registros
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
     finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 
-#  Registrar salida manual
+# Registrar salida manual
 @router.post("/salida")
 def registrar_salida(codigo: str = Form(...)):
     conn = None
     cursor = None
     try:
+        codigo = codigo.strip()
+
         conn = conectar()
-        cursor = conn.cursor(pymysql.cursors.DictCursor)  # ✅ FIX
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
 
         cursor.execute("SELECT estado FROM bicicletas WHERE codigo=%s", (codigo,))
         row = cursor.fetchone()
+
         if not row:
             return {"error": "Código no encontrado"}
 
@@ -144,18 +177,24 @@ def registrar_salida(codigo: str = Form(...)):
             return {"mensaje": "La bicicleta ya fue retirada"}
 
         fecha_salida = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         cursor.execute(
             "UPDATE bicicletas SET fecha_salida=%s, estado=%s WHERE codigo=%s",
             (fecha_salida, "Retirada", codigo)
         )
+
         conn.commit()
+
         return {"mensaje": "Salida registrada"}
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
     finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 
 # Borrar registros del día
@@ -167,13 +206,20 @@ def borrar_registros_dia():
         conn = conectar()
         cursor = conn.cursor()
 
-        cursor.execute("DELETE FROM bicicletas WHERE DATE(fecha_ingreso) = CURDATE()")
+        cursor.execute(
+            "DELETE FROM bicicletas WHERE DATE(fecha_ingreso) = CURDATE()"
+        )
+
         eliminados = cursor.rowcount
         conn.commit()
+
         return {"eliminados": eliminados}
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
     finally:
-        if cursor: cursor.close()
-        if conn: conn.close()
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()

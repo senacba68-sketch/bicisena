@@ -1,246 +1,112 @@
-from fastapi import APIRouter, Form, Query
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Form, UploadFile, File, HTTPException
 from database import conectar
-from datetime import datetime
-from typing import Optional
 import base64
-import pymysql
+import io
+import qrcode
+import json
+import pymysql  # ← ¡AGREGA ESTA LÍNEA!
 
-router = APIRouter(prefix="/vigilante", tags=["Vigilante"])
+router = APIRouter(prefix="/usuarios", tags=["Usuarios"])
 
-# Función auxiliar para convertir BLOB a base64 con prefijo data URI
 def blob_to_b64(blob):
-    try:
-        if not blob:
-            return None
-        return f"data:image/png;base64,{base64.b64encode(blob).decode()}"
-    except Exception:
+    if not blob:
         return None
+    b64 = base64.b64encode(blob).decode()
+    return f"data:image/png;base64,{b64}"
 
-# Entrada y Salida automática con la lectura del QR
-@router.post("/movimiento")
-def registrar_movimiento(codigo: str = Form(...)):
-    conn = None
-    cursor = None
-    try:
-        # Limpiar el código que viene del QR
-        codigo = codigo.strip()
-
-        conn = conectar()
-        cursor = conn.cursor(pymysql.cursors.DictCursor)
-
-        # Buscar usuario por código
-        cursor.execute("SELECT * FROM usuarios WHERE TRIM(codigo) = %s", (codigo,))
-        usuario = cursor.fetchone()
-
-        if not usuario:
-            return JSONResponse(
-                status_code=404,
-                content={"ok": False, "mensaje": f"Usuario no encontrado para código: {codigo}"}
-            )
-
-        usuario_id = usuario["id"]
-
-        # Verificar si ya hay una entrada sin salida (está en parqueadero)
-        cursor.execute(
-            """
-            SELECT * FROM registros 
-            WHERE usuario_id = %s 
-            AND accion = 'Entrada' 
-            AND fecha_salida IS NULL
-            ORDER BY fecha DESC LIMIT 1
-            """,
-            (usuario_id,)
-        )
-        entrada_abierta = cursor.fetchone()
-
-        if entrada_abierta:
-            # Registrar salida
-            fecha_salida = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute(
-                """
-                UPDATE registros 
-                SET accion = 'Salida', fecha_salida = %s 
-                WHERE id = %s
-                """,
-                (fecha_salida, entrada_abierta["id"])
-            )
-            mensaje = "Salida registrada correctamente"
-        else:
-            # Registrar entrada
-            cursor.execute(
-                """
-                INSERT INTO registros 
-                (usuario_id, accion, fecha) 
-                VALUES (%s, 'Entrada', NOW())
-                """,
-                (usuario_id,)
-            )
-            mensaje = "Entrada registrada correctamente"
-
-        conn.commit()
-
-        # Preparar datos del usuario para devolver
-        usuario_data = {
-            "nombre": usuario["nombre"],
-            "cedula": usuario["cedula"],
-            "telefono": usuario["telefono"],
-            "codigo": usuario["codigo"],
-            "qr_blob": blob_to_b64(usuario.get("qr_blob")),
-            "foto_bici_blob": blob_to_b64(usuario.get("foto_bici_blob")),
-            "foto_usuario_blob": blob_to_b64(usuario.get("foto_usuario_blob")),
-        }
-
-        return {
-            "ok": True,
-            "mensaje": mensaje,
-            "usuario": usuario_data
-        }
-
-    except Exception as e:
-        import traceback
-        print("❌ ERROR en registrar_movimiento:", str(e))
-        traceback.print_exc()
-        if conn:
-            conn.rollback()
-        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
-
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
-
-# Listar registros con filtros
-@router.get("/registros")
-def listar_registros(
-    busqueda: Optional[str] = Query(None),
-    filtro: Optional[str] = Query("Todos")
+@router.post("/registro")
+async def registrar_usuario(
+    nombre: str = Form(...),
+    cedula: str = Form(...),
+    telefono: str = Form(...),
+    correo: str = Form(...),
+    contrasena: str = Form(...),
+    codigo: str = Form(...),
+    foto_bici: UploadFile = File(None),
+    foto_usuario: UploadFile = File(None)
 ):
-    conn = None
-    cursor = None
-    try:
-        conn = conectar()
-        cursor = conn.cursor(pymysql.cursors.DictCursor)
-
-        query = """
-            SELECT 
-                r.id,
-                u.codigo,
-                u.nombre,
-                u.cedula,
-                u.telefono,
-                r.fecha AS fecha_ingreso,
-                r.fecha_salida,
-                CASE 
-                    WHEN r.fecha_salida IS NULL THEN 'En parqueadero'
-                    ELSE 'Retirada'
-                END AS estado
-            FROM registros r
-            JOIN usuarios u ON r.usuario_id = u.id
-        """
-        condiciones = []
-        params = []
-
-        if busqueda:
-            condiciones.append("(u.codigo LIKE %s OR u.nombre LIKE %s OR u.cedula LIKE %s)")
-            like = f"%{busqueda}%"
-            params.extend([like, like, like])
-
-        if filtro == "En parqueadero":
-            condiciones.append("r.fecha_salida IS NULL")
-        elif filtro == "Retiradas":
-            condiciones.append("r.fecha_salida IS NOT NULL")
-
-        if condiciones:
-            query += " WHERE " + " AND ".join(condiciones)
-
-        query += " ORDER BY r.fecha DESC"
-
-        cursor.execute(query, params)
-        registros = cursor.fetchall()
-
-        return registros
-
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
-
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
-
-# Registrar salida manual
-@router.post("/salida")
-def registrar_salida(codigo: str = Form(...)):
-    conn = None
-    cursor = None
-    try:
-        codigo = codigo.strip()
-        conn = conectar()
-        cursor = conn.cursor(pymysql.cursors.DictCursor)
-
-        # Buscar usuario
-        cursor.execute("SELECT id FROM usuarios WHERE codigo = %s", (codigo,))
-        usuario = cursor.fetchone()
-        if not usuario:
-            return {"error": "Código no encontrado"}
-
-        usuario_id = usuario["id"]
-
-        # Verificar si hay entrada sin salida
-        cursor.execute(
-            "SELECT id FROM registros WHERE usuario_id = %s AND fecha_salida IS NULL LIMIT 1",
-            (usuario_id,)
-        )
-        entrada_abierta = cursor.fetchone()
-
-        if not entrada_abierta:
-            return {"mensaje": "No hay entrada abierta para registrar salida"}
-
-        fecha_salida = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute(
-            "UPDATE registros SET fecha_salida = %s WHERE id = %s",
-            (fecha_salida, entrada_abierta["id"])
-        )
-        conn.commit()
-
-        return {"mensaje": "Salida registrada manualmente"}
-
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        return JSONResponse(status_code=500, content={"error": str(e)})
-
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
-
-
-# Borrar registros del día (de la tabla registros)
-@router.delete("/registros/dia")
-def borrar_registros_dia():
     conn = None
     cursor = None
     try:
         conn = conectar()
         cursor = conn.cursor()
 
-        cursor.execute(
-            "DELETE FROM registros WHERE DATE(fecha) = CURDATE()"
-        )
-        eliminados = cursor.rowcount
-        conn.commit()
+        bici_bytes = await foto_bici.read() if foto_bici else None
+        usuario_bytes = await foto_usuario.read() if foto_usuario else None
 
-        return {"eliminados": eliminados, "mensaje": f"Eliminados {eliminados} registros de hoy"}
+        datos_qr = json.dumps({
+            "codigo": codigo,
+            "nombre": nombre,
+            "cedula": cedula,
+            "telefono": telefono,
+            "correo": correo
+        })
+
+        qr = qrcode.QRCode(
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_H,
+            box_size=10,
+            border=4
+        )
+        qr.add_data(datos_qr)
+        qr.make(fit=True)
+
+        qr_img = qr.make_image(fill_color="black", back_color="white")
+
+        buf = io.BytesIO()
+        qr_img.save(buf, format="PNG")
+        qr_bytes = buf.getvalue()
+        buf.close()
+
+        cursor.execute("""
+            INSERT INTO usuarios
+            (nombre, cedula, telefono, correo, contrasena, codigo, qr_blob, foto_bici_blob, foto_usuario_blob)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            nombre, cedula, telefono, correo, contrasena, codigo,
+            qr_bytes, bici_bytes, usuario_bytes
+        ))
+
+        conn.commit()
+        return {"ok": True, "mensaje": "Usuario registrado con éxito"}
 
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        if conn:
+            conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+@router.post("/login")
+def login(cedula: str = Form(...), contrasena: str = Form(...)):
+    conn = None
+    cursor = None
+    try:
+        conn = conectar()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)  # ← Ahora sí funciona porque importamos pymysql
+
+        cursor.execute(
+            "SELECT * FROM usuarios WHERE cedula = %s AND contrasena = %s",
+            (cedula, contrasena)
+        )
+        user = cursor.fetchone()
+
+        if not user:
+            return {"ok": False, "mensaje": "Credenciales inválidas"}
+
+        user["qr_blob"] = blob_to_b64(user.get("qr_blob"))
+        user["foto_bici_blob"] = blob_to_b64(user.get("foto_bici_blob"))
+        user["foto_usuario_blob"] = blob_to_b64(user.get("foto_usuario_blob"))
+
+        return {"ok": True, "usuario": user}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     finally:
         if cursor:

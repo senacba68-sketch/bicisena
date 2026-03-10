@@ -26,18 +26,14 @@ def registrar_movimiento(codigo: str = Form(...)):
         codigo = codigo.strip()
         conn = conectar()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
-
         cursor.execute("SELECT * FROM usuarios WHERE TRIM(codigo) = %s", (codigo,))
         usuario = cursor.fetchone()
-
         if not usuario:
             return JSONResponse(
                 status_code=404,
                 content={"ok": False, "mensaje": f"Usuario no encontrado para código: {codigo}"}
             )
-
         usuario_id = usuario["id"]
-
         cursor.execute(
             """
             SELECT * FROM registros 
@@ -49,7 +45,6 @@ def registrar_movimiento(codigo: str = Form(...)):
             (usuario_id,)
         )
         entrada_abierta = cursor.fetchone()
-
         if entrada_abierta:
             fecha_salida = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             cursor.execute(
@@ -71,9 +66,7 @@ def registrar_movimiento(codigo: str = Form(...)):
                 (usuario_id,)
             )
             mensaje = "Entrada registrada correctamente"
-
         conn.commit()
-
         usuario_data = {
             "nombre": usuario["nombre"],
             "cedula": usuario["cedula"],
@@ -83,13 +76,11 @@ def registrar_movimiento(codigo: str = Form(...)):
             "foto_bici_blob": blob_to_b64(usuario.get("foto_bici_blob")),
             "foto_usuario_blob": blob_to_b64(usuario.get("foto_usuario_blob")),
         }
-
         return {
             "ok": True,
             "mensaje": mensaje,
             "usuario": usuario_data
         }
-
     except Exception as e:
         import traceback
         print("❌ ERROR en registrar_movimiento:", str(e))
@@ -97,7 +88,6 @@ def registrar_movimiento(codigo: str = Form(...)):
         if conn:
             conn.rollback()
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
-
     finally:
         if cursor:
             cursor.close()
@@ -115,7 +105,6 @@ def listar_registros(
     try:
         conn = conectar()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
-
         query = """
             SELECT 
                 r.id,
@@ -134,30 +123,22 @@ def listar_registros(
         """
         condiciones = []
         params = []
-
         if busqueda:
             condiciones.append("(u.codigo LIKE %s OR u.nombre LIKE %s OR u.cedula LIKE %s)")
             like = f"%{busqueda}%"
             params.extend([like, like, like])
-
         if filtro == "En parqueadero":
             condiciones.append("r.fecha_salida IS NULL")
         elif filtro == "Retiradas":
             condiciones.append("r.fecha_salida IS NOT NULL")
-
         if condiciones:
             query += " WHERE " + " AND ".join(condiciones)
-
         query += " ORDER BY r.fecha DESC"
-
         cursor.execute(query, params)
         registros = cursor.fetchall()
-
         return registros
-
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
-
     finally:
         if cursor:
             cursor.close()
@@ -173,37 +154,29 @@ def registrar_salida(codigo: str = Form(...)):
         codigo = codigo.strip()
         conn = conectar()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
-
         cursor.execute("SELECT id FROM usuarios WHERE codigo = %s", (codigo,))
         usuario = cursor.fetchone()
         if not usuario:
             return {"error": "Código no encontrado"}
-
         usuario_id = usuario["id"]
-
         cursor.execute(
             "SELECT id FROM registros WHERE usuario_id = %s AND fecha_salida IS NULL LIMIT 1",
             (usuario_id,)
         )
         entrada_abierta = cursor.fetchone()
-
         if not entrada_abierta:
             return {"mensaje": "No hay entrada abierta para registrar salida"}
-
         fecha_salida = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute(
             "UPDATE registros SET fecha_salida = %s WHERE id = %s",
             (fecha_salida, entrada_abierta["id"])
         )
         conn.commit()
-
         return {"mensaje": "Salida registrada manualmente"}
-
     except Exception as e:
         if conn:
             conn.rollback()
         return JSONResponse(status_code=500, content={"error": str(e)})
-
     finally:
         if cursor:
             cursor.close()
@@ -218,18 +191,14 @@ def borrar_registros_dia():
     try:
         conn = conectar()
         cursor = conn.cursor()
-
         cursor.execute(
             "DELETE FROM registros WHERE DATE(fecha) = CURDATE()"
         )
         eliminados = cursor.rowcount
         conn.commit()
-
         return {"eliminados": eliminados, "mensaje": f"Eliminados {eliminados} registros de hoy"}
-
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
-
     finally:
         if cursor:
             cursor.close()

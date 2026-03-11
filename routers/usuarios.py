@@ -24,28 +24,24 @@ async def registrar_usuario(
     foto_bici: UploadFile = File(None),
     foto_usuario: UploadFile = File(None)
 ):
-    conn = None
-    cursor = None
     try:
         conn = conectar()
         cursor = conn.cursor()
 
-        # Leer imágenes
         bici_bytes = await foto_bici.read() if foto_bici else None
         usuario_bytes = await foto_usuario.read() if foto_usuario else None
 
-        # Generar QR con datos en JSON
+        # Datos que irá en el QR (más información útil)
         datos_qr = json.dumps({
             "codigo": codigo,
             "nombre": nombre,
             "cedula": cedula,
-            "telefono": telefono,
-            "correo": correo
+            "telefono": telefono
         })
 
         qr = qrcode.QRCode(
-            version=None,  # Auto-ajuste
-            error_correction=qrcode.constants.ERROR_CORRECT_H,  # Alta corrección
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_H,
             box_size=10,
             border=4
         )
@@ -54,67 +50,47 @@ async def registrar_usuario(
 
         qr_img = qr.make_image(fill_color="black", back_color="white")
 
-        # Guardar QR en memoria como PNG
         buf = io.BytesIO()
         qr_img.save(buf, format="PNG")
         qr_bytes = buf.getvalue()
         buf.close()
 
-        # Insertar en DB
         cursor.execute("""
             INSERT INTO usuarios
             (nombre, cedula, telefono, correo, contrasena, codigo, qr_blob, foto_bici_blob, foto_usuario_blob)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (
-            nombre, cedula, telefono, correo, contrasena, codigo,
-            qr_bytes, bici_bytes, usuario_bytes
-        ))
+        """, (nombre, cedula, telefono, correo, contrasena, codigo, qr_bytes, bici_bytes, usuario_bytes))
 
         conn.commit()
 
         return {"ok": True, "mensaje": "Usuario registrado con éxito"}
 
     except Exception as e:
-        if conn:
-            conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        cursor.close()
+        conn.close()
 
 
 @router.post("/login")
 def login(cedula: str = Form(...), contrasena: str = Form(...)):
-    conn = None
-    cursor = None
-    try:
-        conn = conectar()
-        cursor = conn.cursor(pymysql.cursors.DictCursor)
+    conn = conectar()
+    cursor = conn.cursor()
 
-        cursor.execute(
-            "SELECT * FROM usuarios WHERE cedula = %s AND contrasena = %s",
-            (cedula, contrasena)
-        )
-        user = cursor.fetchone()
+    cursor.execute(
+        "SELECT * FROM usuarios WHERE cedula=%s AND contrasena=%s",
+        (cedula, contrasena)
+    )
+    user = cursor.fetchone()
 
-        if not user:
-            return {"ok": False, "mensaje": "Credenciales inválidas"}
+    cursor.close()
+    conn.close()
 
-        # Convertir blobs a base64
-        user["qr_blob"] = blob_to_b64(user.get("qr_blob"))
-        user["foto_bici_blob"] = blob_to_b64(user.get("foto_bici_blob"))
-        user["foto_usuario_blob"] = blob_to_b64(user.get("foto_usuario_blob"))
+    if not user:
+        return {"ok": False, "mensaje": "Credenciales inválidas"}
 
-        return {"ok": True, "usuario": user}
+    user["qr_blob"] = blob_to_b64(user.get("qr_blob"))
+    user["foto_bici_blob"] = blob_to_b64(user.get("foto_bici_blob"))
+    user["foto_usuario_blob"] = blob_to_b64(user.get("foto_usuario_blob"))
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+    return {"ok": True, "usuario": user}

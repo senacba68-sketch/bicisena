@@ -3,7 +3,7 @@ from database import conectar
 import base64
 import io
 import qrcode
-import json
+import json  # ← Asegúrate de tener esto para json.dumps
 
 router = APIRouter(prefix="/usuarios", tags=["Usuarios"])
 
@@ -28,20 +28,22 @@ async def registrar_usuario(
         conn = conectar()
         cursor = conn.cursor()
 
+        # Leer imágenes
         bici_bytes = await foto_bici.read() if foto_bici else None
         usuario_bytes = await foto_usuario.read() if foto_usuario else None
 
-        # Datos que irá en el QR (más información útil)
+        # CAMBIO AQUÍ: QR con JSON completo (más información útil)
         datos_qr = json.dumps({
             "codigo": codigo,
             "nombre": nombre,
             "cedula": cedula,
-            "telefono": telefono
+            "telefono": telefono,
+            "correo": correo  # opcional
         })
 
         qr = qrcode.QRCode(
-            version=None,
-            error_correction=qrcode.constants.ERROR_CORRECT_H,
+            version=None,  # Auto-ajuste para más datos
+            error_correction=qrcode.constants.ERROR_CORRECT_H,  # Alta corrección para JSON
             box_size=10,
             border=4
         )
@@ -55,11 +57,15 @@ async def registrar_usuario(
         qr_bytes = buf.getvalue()
         buf.close()
 
+        # Guardar en DB
         cursor.execute("""
             INSERT INTO usuarios
             (nombre, cedula, telefono, correo, contrasena, codigo, qr_blob, foto_bici_blob, foto_usuario_blob)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (nombre, cedula, telefono, correo, contrasena, codigo, qr_bytes, bici_bytes, usuario_bytes))
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (
+            nombre, cedula, telefono, correo, contrasena, codigo,
+            qr_bytes, bici_bytes, usuario_bytes
+        ))
 
         conn.commit()
 

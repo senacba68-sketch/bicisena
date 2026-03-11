@@ -26,47 +26,50 @@ def registrar_movimiento(codigo: str = Form(...)):
         codigo = codigo.strip()
         conn = conectar()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # Buscar usuario
         cursor.execute("SELECT * FROM usuarios WHERE TRIM(codigo) = %s", (codigo,))
         usuario = cursor.fetchone()
+
         if not usuario:
             return JSONResponse(
                 status_code=404,
                 content={"ok": False, "mensaje": f"Usuario no encontrado para código: {codigo}"}
             )
+
         usuario_id = usuario["id"]
+
+        # Verificar el último movimiento
         cursor.execute(
             """
-            SELECT * FROM registros 
+            SELECT accion FROM registros 
             WHERE usuario_id = %s 
-            AND accion = 'Entrada' 
-            AND fecha_salida IS NULL
             ORDER BY fecha DESC LIMIT 1
             """,
             (usuario_id,)
         )
-        entrada_abierta = cursor.fetchone()
-        if entrada_abierta:
-            fecha_salida = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute(
-                """
-                UPDATE registros 
-                SET accion = 'Salida', fecha_salida = %s 
-                WHERE id = %s
-                """,
-                (fecha_salida, entrada_abierta["id"])
-            )
+        ultimo = cursor.fetchone()
+
+        if ultimo and ultimo["accion"] == 'Entrada':
+            accion_nueva = 'Salida'
             mensaje = "Salida registrada correctamente"
         else:
-            cursor.execute(
-                """
-                INSERT INTO registros 
-                (usuario_id, accion, fecha) 
-                VALUES (%s, 'Entrada', NOW())
-                """,
-                (usuario_id,)
-            )
+            accion_nueva = 'Entrada'
             mensaje = "Entrada registrada correctamente"
+
+        # Registrar nuevo movimiento
+        cursor.execute(
+            """
+            INSERT INTO registros 
+            (usuario_id, accion, fecha) 
+            VALUES (%s, %s, NOW())
+            """,
+            (usuario_id, accion_nueva)
+        )
+
         conn.commit()
+
+        # Preparar respuesta
         usuario_data = {
             "nombre": usuario["nombre"],
             "cedula": usuario["cedula"],
@@ -76,11 +79,13 @@ def registrar_movimiento(codigo: str = Form(...)):
             "foto_bici_blob": blob_to_b64(usuario.get("foto_bici_blob")),
             "foto_usuario_blob": blob_to_b64(usuario.get("foto_usuario_blob")),
         }
+
         return {
             "ok": True,
             "mensaje": mensaje,
             "usuario": usuario_data
         }
+
     except Exception as e:
         import traceback
         print("❌ ERROR en registrar_movimiento:", str(e))
@@ -88,13 +93,15 @@ def registrar_movimiento(codigo: str = Form(...)):
         if conn:
             conn.rollback()
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
     finally:
         if cursor:
             cursor.close()
         if conn:
             conn.close()
 
-# Listar registros con filtros
+
+# Listar registros con filtros (estado basado en último movimiento)
 @router.get("/registros")
 def listar_registros(
     busqueda: Optional[str] = Query(None),
@@ -105,45 +112,55 @@ def listar_registros(
     try:
         conn = conectar()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
+
         query = """
             SELECT 
-                r.id,
                 u.codigo,
                 u.nombre,
                 u.cedula,
                 u.telefono,
-                r.fecha AS fecha_ingreso,
-                r.fecha_salida,
+                MAX(r.fecha) AS ultima_fecha,
+                MAX(r.accion) AS ultima_accion,
                 CASE 
-                    WHEN r.fecha_salida IS NULL THEN 'En parqueadero'
+                    WHEN MAX(r.accion) = 'Entrada' THEN 'En parqueadero'
                     ELSE 'Retirada'
                 END AS estado
-            FROM registros r
-            JOIN usuarios u ON r.usuario_id = u.id
+            FROM usuarios u
+            LEFT JOIN registros r ON u.id = r.usuario_id
+            GROUP BY u.id, u.codigo, u.nombre, u.cedula, u.telefono
         """
         condiciones = []
         params = []
+
         if busqueda:
             condiciones.append("(u.codigo LIKE %s OR u.nombre LIKE %s OR u.cedula LIKE %s)")
             like = f"%{busqueda}%"
             params.extend([like, like, like])
+
         if filtro == "En parqueadero":
-            condiciones.append("r.fecha_salida IS NULL")
+            condiciones.append("MAX(r.accion) = 'Entrada'")
         elif filtro == "Retiradas":
-            condiciones.append("r.fecha_salida IS NOT NULL")
+            condiciones.append("MAX(r.accion) = 'Salida' OR MAX(r.accion) IS NULL")
+
         if condiciones:
-            query += " WHERE " + " AND ".join(condiciones)
-        query += " ORDER BY r.fecha DESC"
+            query += " HAVING " + " AND ".join(condiciones)
+
+        query += " ORDER BY ultima_fecha DESC"
+
         cursor.execute(query, params)
         registros = cursor.fetchall()
+
         return registros
+
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
     finally:
         if cursor:
             cursor.close()
         if conn:
             conn.close()
+
 
 # Registrar salida manual
 @router.post("/salida")
@@ -154,34 +171,42 @@ def registrar_salida(codigo: str = Form(...)):
         codigo = codigo.strip()
         conn = conectar()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
+
         cursor.execute("SELECT id FROM usuarios WHERE codigo = %s", (codigo,))
         usuario = cursor.fetchone()
         if not usuario:
             return {"error": "Código no encontrado"}
+
         usuario_id = usuario["id"]
+
         cursor.execute(
-            "SELECT id FROM registros WHERE usuario_id = %s AND fecha_salida IS NULL LIMIT 1",
+            "SELECT id FROM registros WHERE usuario_id = %s ORDER BY fecha DESC LIMIT 1",
             (usuario_id,)
         )
-        entrada_abierta = cursor.fetchone()
-        if not entrada_abierta:
+        ultimo = cursor.fetchone()
+
+        if not ultimo or ultimo["accion"] == 'Salida':
             return {"mensaje": "No hay entrada abierta para registrar salida"}
-        fecha_salida = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         cursor.execute(
-            "UPDATE registros SET fecha_salida = %s WHERE id = %s",
-            (fecha_salida, entrada_abierta["id"])
+            "INSERT INTO registros (usuario_id, accion, fecha) VALUES (%s, 'Salida', NOW())",
+            (usuario_id,)
         )
         conn.commit()
+
         return {"mensaje": "Salida registrada manualmente"}
+
     except Exception as e:
         if conn:
             conn.rollback()
         return JSONResponse(status_code=500, content={"error": str(e)})
+
     finally:
         if cursor:
             cursor.close()
         if conn:
             conn.close()
+
 
 # Borrar registros del día
 @router.delete("/registros/dia")
@@ -191,14 +216,18 @@ def borrar_registros_dia():
     try:
         conn = conectar()
         cursor = conn.cursor()
+
         cursor.execute(
             "DELETE FROM registros WHERE DATE(fecha) = CURDATE()"
         )
         eliminados = cursor.rowcount
         conn.commit()
+
         return {"eliminados": eliminados, "mensaje": f"Eliminados {eliminados} registros de hoy"}
+
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
     finally:
         if cursor:
             cursor.close()

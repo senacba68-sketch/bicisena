@@ -39,7 +39,7 @@ def registrar_movimiento(codigo: str = Form(...)):
 
         usuario_id = usuario["id"]
 
-        # Verificar el último movimiento
+        # Verificar el último movimiento (si el último es 'Entrada', registrar 'Salida')
         cursor.execute(
             """
             SELECT accion FROM registros 
@@ -57,7 +57,7 @@ def registrar_movimiento(codigo: str = Form(...)):
             accion_nueva = 'Entrada'
             mensaje = "Entrada registrada correctamente"
 
-        # Registrar nuevo movimiento
+        # Registrar el nuevo movimiento
         cursor.execute(
             """
             INSERT INTO registros 
@@ -69,7 +69,7 @@ def registrar_movimiento(codigo: str = Form(...)):
 
         conn.commit()
 
-        # Preparar respuesta
+        # Preparar datos del usuario para la respuesta
         usuario_data = {
             "nombre": usuario["nombre"],
             "cedula": usuario["cedula"],
@@ -101,7 +101,7 @@ def registrar_movimiento(codigo: str = Form(...)):
             conn.close()
 
 
-# Listar registros con filtros (estado basado en último movimiento)
+# Listar registros con filtros (estado basado en el último movimiento)
 @router.get("/registros")
 def listar_registros(
     busqueda: Optional[str] = Query(None),
@@ -179,8 +179,13 @@ def registrar_salida(codigo: str = Form(...)):
 
         usuario_id = usuario["id"]
 
+        # Verificar si hay una entrada sin salida (último movimiento es 'Entrada')
         cursor.execute(
-            "SELECT id FROM registros WHERE usuario_id = %s ORDER BY fecha DESC LIMIT 1",
+            """
+            SELECT id FROM registros 
+            WHERE usuario_id = %s 
+            ORDER BY fecha DESC LIMIT 1
+            """,
             (usuario_id,)
         )
         ultimo = cursor.fetchone()
@@ -188,6 +193,7 @@ def registrar_salida(codigo: str = Form(...)):
         if not ultimo or ultimo["accion"] == 'Salida':
             return {"mensaje": "No hay entrada abierta para registrar salida"}
 
+        # Registrar salida
         cursor.execute(
             "INSERT INTO registros (usuario_id, accion, fecha) VALUES (%s, 'Salida', NOW())",
             (usuario_id,)

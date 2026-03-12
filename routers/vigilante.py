@@ -39,7 +39,7 @@ def registrar_movimiento(codigo: str = Form(...)):
 
         usuario_id = usuario["id"]
 
-        # Verificar el último movimiento (si el último es 'Entrada', registrar 'Salida')
+        # Verificar el último movimiento
         cursor.execute(
             """
             SELECT accion FROM registros 
@@ -101,7 +101,7 @@ def registrar_movimiento(codigo: str = Form(...)):
             conn.close()
 
 
-# Listar registros con filtros (estado basado en el último movimiento)
+# Listar registros con filtros - AHORA DEVUELVE FECHAS CORRECTAS
 @router.get("/registros")
 def listar_registros(
     busqueda: Optional[str] = Query(None),
@@ -119,7 +119,8 @@ def listar_registros(
                 u.nombre,
                 u.cedula,
                 u.telefono,
-                MAX(r.fecha) AS ultima_fecha,
+                MIN(r.fecha) AS fecha_ingreso,          -- Primera fecha = ingreso
+                MAX(r.fecha) AS fecha_salida,           -- Última fecha = salida (si ya salió)
                 MAX(r.accion) AS ultima_accion,
                 CASE 
                     WHEN MAX(r.accion) = 'Entrada' THEN 'En parqueadero'
@@ -145,14 +146,28 @@ def listar_registros(
         if condiciones:
             query += " HAVING " + " AND ".join(condiciones)
 
-        query += " ORDER BY ultima_fecha DESC"
+        query += " ORDER BY MAX(r.fecha) DESC"
 
         cursor.execute(query, params)
         registros = cursor.fetchall()
 
+        # Formatear fechas para que se vean como string legible en la app
+        for reg in registros:
+            if reg["fecha_ingreso"]:
+                reg["fecha_ingreso"] = reg["fecha_ingreso"].strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                reg["fecha_ingreso"] = "-"
+            if reg["fecha_salida"]:
+                reg["fecha_salida"] = reg["fecha_salida"].strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                reg["fecha_salida"] = "-"
+
         return registros
 
     except Exception as e:
+        import traceback
+        print("❌ ERROR en listar_registros:", str(e))
+        traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
 
     finally:
@@ -179,10 +194,9 @@ def registrar_salida(codigo: str = Form(...)):
 
         usuario_id = usuario["id"]
 
-        # Verificar si hay una entrada sin salida (último movimiento es 'Entrada')
         cursor.execute(
             """
-            SELECT id FROM registros 
+            SELECT accion FROM registros 
             WHERE usuario_id = %s 
             ORDER BY fecha DESC LIMIT 1
             """,
@@ -193,7 +207,6 @@ def registrar_salida(codigo: str = Form(...)):
         if not ultimo or ultimo["accion"] == 'Salida':
             return {"mensaje": "No hay entrada abierta para registrar salida"}
 
-        # Registrar salida
         cursor.execute(
             "INSERT INTO registros (usuario_id, accion, fecha) VALUES (%s, 'Salida', NOW())",
             (usuario_id,)
